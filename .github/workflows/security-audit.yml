@@ -15,6 +15,10 @@ on:
         description: 'Node.js version'
         type: string
         default: '20'
+      pnpm-version:
+        description: 'pnpm version (required by pnpm/action-setup)'
+        type: string
+        default: '10'
       gitleaks-enabled:
         description: 'Run gitleaks secret scanning'
         type: boolean
@@ -40,6 +44,8 @@ jobs:
       - name: Setup pnpm
         if: inputs.package-manager == 'pnpm'
         uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
