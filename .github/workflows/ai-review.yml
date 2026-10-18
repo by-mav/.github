@@ -1,0 +1,89 @@
+name: Revisão por IA (Reusable)
+
+# Revisa todo PR: bugs, segurança e as regras do REVIEW.md do repositório.
+# Cada achado vira comentário na linha; o job falha enquanto houver achado
+# "important", e o commit que corrige roda a revisão de novo.
+#
+# Uso no repositório:
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review]
+#   jobs:
+#     revisao:
+#       uses: by-mav/.github/.github/workflows/ai-review.yml@main
+#       secrets: inherit
+# e marcar "revisao / Revisão por IA" como check obrigatório no ruleset.
+
+on:
+  workflow_call:
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  revisar:
+    name: Revisão por IA
+    # Dependabot não recebe segredos de Actions; patch/minor já seguem a política de auto-merge.
+    if: github.event.pull_request.draft == false && github.actor != 'dependabot[bot]'
+    runs-on: [self-hosted, Linux, X64, monstrinho]
+    timeout-minutes: 30
+    concurrency:
+      group: revisao-ia-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Revisar
+        id: revisao
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR: ${{ github.event.pull_request.number }}
+            BASE: ${{ github.event.pull_request.base.sha }}
+            HEAD: ${{ github.event.pull_request.head.sha }}
+
+            Você revisa este PR antes do merge. Ninguém mais lê o código.
+
+            1. Leia REVIEW.md na raiz (se existir): é o que importa neste repositório.
+            2. Leia os comentários de revisão já postados (gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments).
+               Não repita achado já postado; achado que o autor respondeu com razão verificável no código sai da lista. Se já houver 3 ou mais rodadas suas neste PR, revise só o que mudou desde
+               a última e, se o mesmo tipo de problema voltou, diga no resumo para repensar a abordagem.
+            3. Rode em paralelo três subagentes sobre `git diff BASE...HEAD`: bugs (resultado errado, crash, caso de borda,
+               chamador que quebra), segurança (autorização, RLS, segredo, entrada não validada, dado sensível em log)
+               e regras do REVIEW.md.
+            4. Verifique cada achado com um subagente novo que tenta refutá-lo lendo o código. Fica só o que ele confirma
+               com arquivo e linha. Estilo, gosto e "considere" não são achados.
+            5. Para cada achado confirmado, poste UM comentário na linha com mcp__github_inline_comment__create_inline_comment
+               (confirmed: true), em português, começando por [Important], [Nit] ou [Pre-existing], dizendo o caso concreto
+               que quebra e a correção mínima. Diga a classe do erro, não só a linha.
+            6. Responda com o JSON pedido: todos os achados confirmados.
+
+            important = bug, falha de segurança ou regra do REVIEW.md quebrada nesta mudança.
+            nit = melhoria pequena. pre-existing = problema que já existia antes deste PR.
+          claude_args: |
+            --model opus
+            --allowedTools "Agent,Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git blame:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api:*),mcp__github_inline_comment__create_inline_comment"
+            --json-schema '{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","required":["severity","category","file","line","summary"],"properties":{"severity":{"enum":["important","nit","pre-existing"]},"category":{"enum":["bug","security","rule"]},"file":{"type":"string"},"line":{"type":"integer"},"summary":{"type":"string"}}}}}}'
+
+      - name: Bloquear com achado importante
+        env:
+          RESULTADO: ${{ steps.revisao.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          [ -n "$RESULTADO" ] || { echo "::error::A revisão não devolveu resultado."; exit 1; }
+          echo "$RESULTADO" | jq -r '.findings[] | "- [\(.severity)] \(.category) \(.file):\(.line) — \(.summary)"' >> "$GITHUB_STEP_SUMMARY"
+          n=$(echo "$RESULTADO" | jq '[.findings[] | select(.severity == "important")] | length')
+          if [ "$n" -gt 0 ]; then
+            echo "::error::$n achado(s) importante(s). Corrija e faça push, ou responda na linha e rode este job de novo."
+            exit 1
+          fi
+          echo "Sem achado importante." >> "$GITHUB_STEP_SUMMARY"
