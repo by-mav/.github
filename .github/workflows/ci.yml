@@ -1,0 +1,43 @@
+# Este repositório só publica workflows reutilizáveis (workflow_call).
+# Este job existe para o PR rodar no runner self-hosted, sem sudo.
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  workflows:
+    name: Self-hosted workflow check
+    runs-on: [self-hosted, Linux, X64, monstrinho]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Confirm shared workflows target the self-hosted runner
+        run: |
+          set -euo pipefail
+          for f in .github/workflows/dependabot-auto-merge.yml .github/workflows/security-audit.yml; do
+            if grep -E 'runs-on:.*(ubuntu-|windows-|macos-)' "$f"; then
+              echo "::error file=$f::GitHub-hosted runner ainda presente"
+              exit 1
+            fi
+            grep -q 'runs-on: \[self-hosted, Linux, X64, monstrinho\]' "$f"
+          done
+          if grep -nE '(^|[[:space:]])sudo([[:space:]]|$)' .github/workflows/dependabot-auto-merge.yml .github/workflows/security-audit.yml; then
+            echo "::error::passo com sudo; o runner self-hosted não usa sudo"
+            exit 1
+          fi
+          echo "OK on ${RUNNER_NAME:-unknown} (${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown})"
+
+      - name: Install and run Gitleaks without sudo
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/gitleaks"
+          mkdir -p "$install_dir"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz" \
+            | tar xz -C "$install_dir" gitleaks
+          chmod +x "$install_dir/gitleaks"
+          "$install_dir/gitleaks" detect --source . --redact -v
