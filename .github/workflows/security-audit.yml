@@ -34,7 +34,7 @@ permissions:
 jobs:
   dependency-audit:
     name: Dependency Audit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, monstrinho]
     timeout-minutes: 10
 
     steps:
@@ -73,7 +73,7 @@ jobs:
   secret-scanning:
     name: Secret Scanning (Gitleaks)
     if: inputs.gitleaks-enabled
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, monstrinho]
     timeout-minutes: 5
 
     steps:
@@ -85,6 +85,10 @@ jobs:
       - name: Install and run Gitleaks
         continue-on-error: true  # non-blocking until baseline is established
         run: |
+          # Runner user cannot write /usr/local/bin; keep the binary in the job temp dir.
+          install_dir="${RUNNER_TEMP}/gitleaks"
+          mkdir -p "$install_dir"
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${{ inputs.gitleaks-version }}/gitleaks_${{ inputs.gitleaks-version }}_linux_x64.tar.gz" \
-            | tar xz -C /usr/local/bin gitleaks
-          gitleaks detect --source . --redact -v
+            | tar xz -C "$install_dir" gitleaks
+          chmod +x "$install_dir/gitleaks"
+          "$install_dir/gitleaks" detect --source . --redact -v
