@@ -56,20 +56,21 @@ jobs:
           install -m 0755 "$bin" "$RUNNER_TEMP/asc"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Limites da Apple
+      - name: Todos os idiomas e limites da Apple
         shell: bash
         run: |
           set -euo pipefail
           jq -r '
             {"appInfo.name":30,"appInfo.subtitle":30,"version.keywords":100,
              "version.promotionalText":170,"version.description":4000,"version.whatsNew":4000} as $max
-            | .strings | to_entries[] | select($max[.key]) | .key as $k
-            | .value.localizations | to_entries[]
-            | (.value.stringUnit.value // "") as $v
-            | select(($v | length) > $max[$k])
-            | "\(.key) \($k): \($v | length) de \($max[$k])"' "${{ inputs.catalog }}" > "$RUNNER_TEMP/estouros.txt"
-          if [[ -s "$RUNNER_TEMP/estouros.txt" ]]; then
-            cat "$RUNNER_TEMP/estouros.txt"
+            | ([.strings[].localizations | keys[]] | unique) as $idiomas
+            | .strings | to_entries[] | .key as $k | .value.localizations as $locs
+            | ($idiomas[] | select(($locs[.].stringUnit.state // "") != "translated") | "\(.) \($k): sem tradução"),
+              ($locs | to_entries[] | (.value.stringUnit.value // "") as $v
+                | select($max[$k] and ($v | length) > $max[$k])
+                | "\(.key) \($k): \($v | length) de \($max[$k])")' "${{ inputs.catalog }}" > "$RUNNER_TEMP/problemas.txt"
+          if [[ -s "$RUNNER_TEMP/problemas.txt" ]]; then
+            cat "$RUNNER_TEMP/problemas.txt"
             exit 1
           fi
 
