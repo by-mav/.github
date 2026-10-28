@@ -1,0 +1,123 @@
+# Página da App Store a partir de um String Catalog do repositório.
+# Chaves: appInfo.<campo> e version.<campo>, campos da asc (name, subtitle, privacyPolicyUrl,
+# description, keywords, promotionalText, marketingUrl, supportUrl, whatsNew).
+# Idioma do catálogo vira locale da App Store: en→en-US, es→es-ES, nl→nl-NL, de→de-DE,
+# fr→fr-FR, ar→ar-SA, nb→no; os demais (pt-BR, en-GB, sv, ja...) passam iguais.
+# PR: gera, confere os limites da Apple e mostra o que mudaria. main: envia para a versão em preparação.
+name: App Store metadata
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: ID do app na App Store Connect
+        type: string
+        required: true
+      catalog:
+        description: Caminho do String Catalog da loja
+        type: string
+        default: AppStoreMetadata/AppStore.xcstrings
+    secrets:
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      ASC_PRIVATE_KEY_B64:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: App Store metadata
+    runs-on: [self-hosted, Linux, X64, monstrinho]
+    timeout-minutes: 10
+    env:
+      ASC_VERSION: 5.17.1
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY_B64: ${{ secrets.ASC_PRIVATE_KEY_B64 }}
+      DIR: ${{ runner.temp }}/metadata
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Instala a asc
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/rorkai/App-Store-Connect-CLI/releases/download/${ASC_VERSION}"
+          bin="asc_${ASC_VERSION}_linux_amd64"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$base/$bin"
+          curl -fsSLO "$base/asc_${ASC_VERSION}_checksums.txt"
+          grep " ${bin}\$" "asc_${ASC_VERSION}_checksums.txt" | sha256sum -c -
+          install -m 0755 "$bin" "$RUNNER_TEMP/asc"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Limites da Apple
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '
+            {"appInfo.name":30,"appInfo.subtitle":30,"version.keywords":100,
+             "version.promotionalText":170,"version.description":4000,"version.whatsNew":4000} as $max
+            | .strings | to_entries[] | select($max[.key]) | .key as $k
+            | .value.localizations | to_entries[]
+            | (.value.stringUnit.value // "") as $v
+            | select(($v | length) > $max[$k])
+            | "\(.key) \($k): \($v | length) de \($max[$k])"' "${{ inputs.catalog }}" > "$RUNNER_TEMP/estouros.txt"
+          if [[ -s "$RUNNER_TEMP/estouros.txt" ]]; then
+            cat "$RUNNER_TEMP/estouros.txt"
+            exit 1
+          fi
+
+      - name: Gera o pacote da asc
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$DIR"
+          jq -c '
+            def asc: {"en":"en-US","es":"es-ES","nl":"nl-NL","de":"de-DE","fr":"fr-FR","ar":"ar-SA","nb":"no"}[.] // .;
+            [.strings | to_entries[] | (.key | split(".")) as [$kind, $field]
+              | .value.localizations | to_entries[]
+              | {kind: $kind, field: $field, loc: (.key | asc), value: .value.stringUnit.value}]
+            | group_by([.kind, .loc])[]
+            | {kind: .[0].kind, loc: .[0].loc, data: (map({(.field): .value}) | add)}' "${{ inputs.catalog }}" |
+          while IFS= read -r row; do
+            kind=$(jq -r .kind <<<"$row")
+            loc=$(jq -r .loc <<<"$row")
+            if [[ "$kind" == appInfo ]]; then dir="$DIR/app-info"; else dir="$DIR/version/current"; fi
+            mkdir -p "$dir"
+            jq -c .data <<<"$row" > "$dir/$loc.json"
+          done
+          asc metadata validate --dir "$DIR"
+
+      - name: Versão em preparação
+        id: version
+        if: env.ASC_KEY_ID != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(asc versions list --app "${{ inputs.app-id }}" --limit 10 --output json |
+            jq -r '[.data[] | select(.attributes.platform == "IOS")
+              | select(.attributes.appStoreState | IN("PREPARE_FOR_SUBMISSION","DEVELOPER_REJECTED","REJECTED","METADATA_REJECTED"))
+              | .attributes.versionString][0] // empty')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ -z "$version" ]]; then
+            echo "Nenhuma versão em preparação; o envio espera a próxima."
+          else
+            mv "$DIR/version/current" "$DIR/version/$version"
+          fi
+
+      - name: O que mudaria
+        if: steps.version.outputs.version != '' && github.event_name == 'pull_request'
+        shell: bash
+        run: asc metadata push --app "${{ inputs.app-id }}" --version "${{ steps.version.outputs.version }}" --dir "$DIR" --if-exists update --dry-run --output table
+
+      - name: Envia para a App Store Connect
+        if: steps.version.outputs.version != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: asc metadata push --app "${{ inputs.app-id }}" --version "${{ steps.version.outputs.version }}" --dir "$DIR" --if-exists update --output table
