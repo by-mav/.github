@@ -3,7 +3,7 @@
 # description, keywords, promotionalText, marketingUrl, supportUrl, whatsNew).
 # Idioma do catálogo vira locale da App Store: en→en-US, es→es-ES, nl→nl-NL, de→de-DE,
 # fr→fr-FR, ar→ar-SA, nb→no; os demais (pt-BR, en-GB, sv, ja...) passam iguais.
-# PR: gera, confere os limites da Apple e mostra o que mudaria. main: envia para a versão em preparação.
+# PR: gera, confere os limites da Apple e mostra o que mudaria. main: envia para cada versão em preparação, de qualquer plataforma.
 name: App Store metadata
 
 on:
@@ -96,30 +96,42 @@ jobs:
           done
           asc metadata validate --dir "$DIR"
 
-      - name: Versão em preparação
+      - name: Versões em preparação
         id: version
         if: env.ASC_KEY_ID != ''
         shell: bash
         run: |
           set -euo pipefail
           DIR="$RUNNER_TEMP/metadata"
-          version=$(asc versions list --app "${{ inputs.app-id }}" --limit 10 --output json |
-            jq -r '[.data[] | select(.attributes.platform == "IOS")
+          asc versions list --app "${{ inputs.app-id }}" --limit 20 --output json |
+            jq -r '[.data[]
               | select(.attributes.appStoreState | IN("PREPARE_FOR_SUBMISSION","DEVELOPER_REJECTED","REJECTED","METADATA_REJECTED"))
-              | .attributes.versionString][0] // empty')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [[ -z "$version" ]]; then
+              | "\(.attributes.platform) \(.attributes.versionString)"] | unique[]' > "$RUNNER_TEMP/versoes.txt"
+          if [[ ! -s "$RUNNER_TEMP/versoes.txt" ]]; then
             echo "Nenhuma versão em preparação; o envio espera a próxima."
-          else
-            mv "$DIR/version/current" "$DIR/version/$version"
+            echo "found=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          while read -r platform version; do
+            [[ -d "$DIR/version/$version" ]] || cp -R "$DIR/version/current" "$DIR/version/$version"
+          done < "$RUNNER_TEMP/versoes.txt"
+          rm -rf "$DIR/version/current"
+          echo "found=yes" >> "$GITHUB_OUTPUT"
 
       - name: O que mudaria
-        if: steps.version.outputs.version != '' && github.event_name == 'pull_request'
+        if: steps.version.outputs.found != '' && github.event_name == 'pull_request'
         shell: bash
-        run: asc metadata push --app "${{ inputs.app-id }}" --version "${{ steps.version.outputs.version }}" --dir "$RUNNER_TEMP/metadata" --if-exists update --dry-run --output table
+        run: |
+          set -euo pipefail
+          while read -r platform version; do
+            asc metadata push --app "${{ inputs.app-id }}" --version "$version" --platform "$platform" --dir "$RUNNER_TEMP/metadata" --if-exists update --dry-run --output table
+          done < "$RUNNER_TEMP/versoes.txt"
 
       - name: Envia para a App Store Connect
-        if: steps.version.outputs.version != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.version.outputs.found != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
-        run: asc metadata push --app "${{ inputs.app-id }}" --version "${{ steps.version.outputs.version }}" --dir "$RUNNER_TEMP/metadata" --if-exists update --output table
+        run: |
+          set -euo pipefail
+          while read -r platform version; do
+            asc metadata push --app "${{ inputs.app-id }}" --version "$version" --platform "$platform" --dir "$RUNNER_TEMP/metadata" --if-exists update --output table
+          done < "$RUNNER_TEMP/versoes.txt"
