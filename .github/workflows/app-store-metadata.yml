@@ -128,7 +128,7 @@ jobs:
           done < "$RUNNER_TEMP/versoes.txt"
 
       - name: Envia para a App Store Connect
-        if: steps.version.outputs.found != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.version.outputs.found != '' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
