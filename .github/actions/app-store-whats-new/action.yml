@@ -1,0 +1,44 @@
+name: Lint de Novidades da App Store
+description: Exige a frase de manutenção em cada idioma do catálogo.
+inputs:
+  catalog:
+    description: Caminho do String Catalog da App Store.
+    default: AppStoreMetadata/AppStore.xcstrings
+runs:
+  using: composite
+  steps:
+    - name: Valida Novidades
+      shell: bash
+      env:
+        CATALOG: ${{ inputs.catalog }}
+      run: |
+        set -euo pipefail
+        jq -e '
+          "Bug fixes and improvements to performance and usability." as $english
+          | {
+              "en": $english, "en-US": $english, "en-AU": $english,
+              "en-CA": $english, "en-GB": $english,
+              "es": "Corrección de errores y mejoras de rendimiento y usabilidad.",
+              "es-ES": "Corrección de errores y mejoras de rendimiento y usabilidad.",
+              "nl": "Bugfixes en verbeteringen in prestaties en gebruiksgemak.",
+              "nl-NL": "Bugfixes en verbeteringen in prestaties en gebruiksgemak.",
+              "pt-BR": "Correções de bugs e melhorias de desempenho e usabilidade.",
+              "sv": "Buggfixar och förbättringar av prestanda och användbarhet."
+            } as $approved
+          | .strings["version.whatsNew"].localizations as $notes
+          | if any(.strings | keys[]; . != "version.whatsNew" and split(".")[1] == "whatsNew")
+            then error("version.whatsNew: há outra chave para o mesmo campo")
+            elif ($notes | type != "object" or length == 0)
+            then error("version.whatsNew: faltam as notas localizadas")
+            else
+              ([.strings[].localizations | keys[]] | unique) as $locales
+              | [$locales[] as $locale
+                 | select($approved[$locale] == null
+                          or $notes[$locale].stringUnit.state != "translated"
+                          or $notes[$locale].stringUnit.value != $approved[$locale])
+                 | $locale] as $invalid
+              | if ($invalid | length) > 0
+                then error("version.whatsNew: use somente a frase de manutenção aprovada em " + ($invalid | join(", ")))
+                else true end
+            end
+        ' "$CATALOG"
