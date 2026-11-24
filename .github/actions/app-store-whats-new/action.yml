@@ -26,8 +26,10 @@ runs:
               "sv": "Buggfixar och förbättringar av prestanda och användbarhet."
             } as $approved
           | .strings["version.whatsNew"].localizations as $notes
-          | if any(.strings | keys[]; . != "version.whatsNew" and split(".")[1] == "whatsNew")
-            then error("version.whatsNew: há outra chave para o mesmo campo")
+          | if any(.strings | keys[];
+                   . == "appInfo.whatsNew" or
+                   (split(".") | length != 2 or (.[0] != "appInfo" and .[0] != "version")))
+            then error("O catálogo aceita somente chaves appInfo.<campo> e version.<campo>, com version.whatsNew para Novidades")
             elif ($notes | type != "object" or length == 0)
             then error("version.whatsNew: faltam as notas localizadas")
             else
