@@ -26,7 +26,9 @@ runs:
               "sv": "Buggfixar och förbättringar av prestanda och användbarhet."
             } as $approved
           | .strings["version.whatsNew"].localizations as $notes
-          | if ($notes | type != "object" or length == 0)
+          | if any(.strings | keys[]; . != "version.whatsNew" and split(".")[1] == "whatsNew")
+            then error("version.whatsNew: há outra chave para o mesmo campo")
+            elif ($notes | type != "object" or length == 0)
             then error("version.whatsNew: faltam as notas localizadas")
             else
               ([.strings[].localizations | keys[]] | unique) as $locales
