@@ -43,6 +43,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Lint de Novidades da App Store
+        if: inputs.app-id == '6758282039' || inputs.app-id == '6759848167'
+        uses: by-mav/.github/.github/actions/app-store-whats-new@main
+        with:
+          catalog: ${{ inputs.catalog }}
+
       - name: Instala a asc
         shell: bash
         run: |
