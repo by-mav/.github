@@ -23,7 +23,9 @@ runs:
               "nl": "Bugfixes en verbeteringen in prestaties en gebruiksgemak.",
               "nl-NL": "Bugfixes en verbeteringen in prestaties en gebruiksgemak.",
               "pt-BR": "Correções de bugs e melhorias de desempenho e usabilidade.",
-              "sv": "Buggfixar och förbättringar av prestanda och användbarhet."
+              "sv": "Buggfixar och förbättringar av prestanda och användbarhet.",
+              "de": "Fehlerbehebungen und Verbesserungen bei Leistung und Benutzerfreundlichkeit.",
+              "de-DE": "Fehlerbehebungen und Verbesserungen bei Leistung und Benutzerfreundlichkeit."
             } as $approved
           | .strings["version.whatsNew"].localizations as $notes
           | if any(.strings | keys[];
